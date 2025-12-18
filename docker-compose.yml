@@ -1,0 +1,101 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      GCR_HTTP_ADDR: ${GCR_HTTP_ADDR}
+      REDIS_ADDR: ${REDIS_ADDR}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - kafka
+      - zookeeper
+    volumes:
+      - ./data:/app/data
+
+  redis:
+    image: redis/redis-stack-server:7.4.0-v0
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  zookeeper:
+    image: public.ecr.aws/bitnami/zookeeper:3.9
+    platform: linux/amd64
+    env_file:
+      - .env
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: ${ALLOW_ANONYMOUS_LOGIN}
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: public.ecr.aws/bitnami/kafka:3.7
+    platform: linux/amd64
+    depends_on:
+      - zookeeper
+    env_file:
+      - .env
+    environment:
+      KAFKA_BROKER_ID: ${KAFKA_BROKER_ID}
+      KAFKA_ZOOKEEPER_CONNECT: ${KAFKA_ZOOKEEPER_CONNECT}
+      KAFKA_LISTENERS: ${KAFKA_LISTENERS}
+      KAFKA_ADVERTISED_LISTENERS: ${KAFKA_ADVERTISED_LISTENERS}
+      ALLOW_PLAINTEXT_LISTENER: ${ALLOW_PLAINTEXT_LISTENER}
+      KAFKA_CFG_MESSAGE_MAX_BYTES: 104857600
+      KAFKA_CFG_REPLICA_FETCH_MAX_BYTES: 104857600
+      KAFKA_CFG_FETCH_MESSAGE_MAX_BYTES: 104857600
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/bitnami/kafka
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":${MINIO_CONSOLE_PORT}"
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+
+  trino:
+    image: trinodb/trino:435
+    ports:
+      - "${TRINO_PORT:-8081}:8080"
+    depends_on:
+      - minio
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog
+
+  spark:
+    image: public.ecr.aws/bitnami/spark:3.5.4
+    platform: linux/amd64
+    ports:
+      - "${SPARK_MASTER_WEB_PORT:-8082}:8080"
+      - "${SPARK_MASTER_RPC_PORT:-7077}:7077"
+    environment:
+      SPARK_MODE: ${SPARK_MODE:-master}
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_DIR: /tmp
+      SPARK_MASTER_URL: spark://spark:7077
+    volumes:
+      - ./data:/opt/bitnami/spark/data
+      - spark-data:/tmp
+    depends_on:
+      - minio
+
+volumes:
+  kafka-data:
+  minio-data:
+  spark-data:

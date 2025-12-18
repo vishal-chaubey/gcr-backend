@@ -1,0 +1,57 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Data directories
+data/
+*.jsonl
+*.log
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+.dockerignore
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Test coverage
+coverage.txt
+coverage.html
+*.coverprofile
+
+# Build artifacts
+bin/
+dist/
+build/
+
+# Dependencies (if using vendor)
+vendor/
+
+# Air (live reload) tmp directory
+tmp/
+
