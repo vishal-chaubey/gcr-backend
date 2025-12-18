@@ -16,6 +16,7 @@ import (
 	"gcr-backend/internal/httpapi"
 	"gcr-backend/internal/kstream"
 	"gcr-backend/internal/projections"
+	"gcr-backend/internal/trino"
 )
 
 func main() {
@@ -50,6 +51,10 @@ func main() {
 	// Discovery API (read side)
 	disc := discovery.NewService()
 	disc.RegisterRoutes(r)
+
+	// Trino Query API
+	trinoService := trino.NewService()
+	trinoService.RegisterRoutes(r)
 
 	addr := getEnv("GCR_HTTP_ADDR", ":8080")
 	server := &http.Server{
