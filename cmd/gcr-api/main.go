@@ -13,6 +13,7 @@ import (
 
 	"gcr-backend/internal/bloom"
 	"gcr-backend/internal/discovery"
+	"gcr-backend/internal/hudi"
 	"gcr-backend/internal/httpapi"
 	"gcr-backend/internal/jsonl"
 	"gcr-backend/internal/kstream"
@@ -59,6 +60,10 @@ func main() {
 
 	// JSONL Query API (works with current data files)
 	jsonl.RegisterRoutes(r)
+
+	// Hudi Data API (dedicated API for Hudi data)
+	hudiService := hudi.NewService()
+	hudiService.RegisterRoutes(r)
 
 	addr := getEnv("GCR_HTTP_ADDR", ":8080")
 	server := &http.Server{

@@ -7,10 +7,11 @@ This document explains how to use the Trino Query API to query data from Hudi ta
 Trino is used to query Hudi tables (data lake format) for analytics, reporting, and data exploration. The API provides REST endpoints to execute SQL queries against Trino.
 
 **Current Status:**
-- Trino is configured and running (port 8081)
-- Hudi connector is configured
-- API endpoints are available
-- **Note:** Hudi tables need to be created from JSONL files (see setup below)
+- ✅ Trino is **working** and can execute queries
+- ✅ API endpoints are available and functional
+- ⚠️ Currently using `memory` catalog (for testing)
+- ⚠️ Hudi connector is configured but **Hudi tables need to be created** from JSONL files to query actual data
+- 💡 **For now, use `/api/data/*` endpoints to query actual provider/item data from JSONL files**
 
 ---
 

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -70,20 +70,21 @@ func NewClient() *Client {
 
 // ExecuteQuery executes a SQL query and returns results
 func (c *Client) ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error) {
-	// Create query request
+	// Trino expects SQL in POST body (not query parameter)
 	queryURL := fmt.Sprintf("%s/v1/statement", c.baseURL)
 	
-	req, err := http.NewRequestWithContext(ctx, "POST", queryURL, nil)
+	// Create request with SQL in body
+	req, err := http.NewRequestWithContext(ctx, "POST", queryURL, strings.NewReader(sql))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("X-Trino-User", c.user)
-	req.Header.Set("X-Trino-Catalog", "hudi")
+	req.Header.Set("X-Trino-Catalog", "memory") // Use memory catalog for now (Hudi needs setup)
 	req.Header.Set("X-Trino-Schema", "default")
-	req.URL.RawQuery = url.Values{"query": {sql}}.Encode()
+	req.Header.Set("Content-Type", "text/plain")
 
-	// Execute query
+	// Execute query - Trino returns async response with nextUri
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
@@ -95,13 +96,83 @@ func (c *Client) ExecuteQuery(ctx context.Context, sql string) (*QueryResult, er
 		return nil, fmt.Errorf("trino error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
-	var result QueryResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	// Trino returns async response - parse initial response
+	var trinoResponse struct {
+		ID      string `json:"id"`
+		NextURI string `json:"nextUri"`
+		Stats   Stats  `json:"stats"`
+		Data    []Row  `json:"data"`
+		Columns []Column `json:"columns"`
+		Error   *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&trinoResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return &result, nil
+	// If there's an error, return it
+	if trinoResponse.Error != nil {
+		return nil, fmt.Errorf("trino query error: %s", trinoResponse.Error.Message)
+	}
+
+	// Poll nextUri until query completes
+	nextURI := trinoResponse.NextURI
+	for nextURI != "" {
+		req, err := http.NewRequestWithContext(ctx, "GET", nextURI, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to poll query: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("trino error (status %d): %s", resp.StatusCode, string(body))
+		}
+
+		var pollResponse struct {
+			NextURI string `json:"nextUri"`
+			Stats   Stats  `json:"stats"`
+			Data    []Row  `json:"data"`
+			Columns []Column `json:"columns"`
+			Error   *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&pollResponse); err != nil {
+			return nil, fmt.Errorf("failed to decode poll response: %w", err)
+		}
+
+		// Accumulate data
+		if len(pollResponse.Data) > 0 {
+			trinoResponse.Data = append(trinoResponse.Data, pollResponse.Data...)
+		}
+		if len(pollResponse.Columns) > 0 {
+			trinoResponse.Columns = pollResponse.Columns
+		}
+		trinoResponse.Stats = pollResponse.Stats
+
+		// Check for errors
+		if pollResponse.Error != nil {
+			return nil, fmt.Errorf("trino query error: %s", pollResponse.Error.Message)
+		}
+
+		// If no nextUri, query is complete
+		nextURI = pollResponse.NextURI
+	}
+
+	return &QueryResult{
+		Columns: trinoResponse.Columns,
+		Data:    trinoResponse.Data,
+		Stats:   trinoResponse.Stats,
+	}, nil
 }
 
 // Query executes a SQL query and returns JSON results
