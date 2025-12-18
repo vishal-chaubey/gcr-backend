@@ -14,6 +14,7 @@ import (
 	"gcr-backend/internal/bloom"
 	"gcr-backend/internal/discovery"
 	"gcr-backend/internal/httpapi"
+	"gcr-backend/internal/jsonl"
 	"gcr-backend/internal/kstream"
 	"gcr-backend/internal/projections"
 	"gcr-backend/internal/trino"
@@ -52,9 +53,12 @@ func main() {
 	disc := discovery.NewService()
 	disc.RegisterRoutes(r)
 
-	// Trino Query API
+	// Trino Query API (requires Hudi tables setup)
 	trinoService := trino.NewService()
 	trinoService.RegisterRoutes(r)
+
+	// JSONL Query API (works with current data files)
+	jsonl.RegisterRoutes(r)
 
 	addr := getEnv("GCR_HTTP_ADDR", ":8080")
 	server := &http.Server{

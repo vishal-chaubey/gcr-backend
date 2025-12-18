@@ -47,7 +47,16 @@ type Stats struct {
 
 // NewClient creates a new Trino client
 func NewClient() *Client {
-	trinoURL := getEnv("TRINO_URL", "http://trino:8080")
+	// Try to detect if running in Docker or locally
+	// In Docker: use service name, locally: use localhost
+	trinoURL := getEnv("TRINO_URL", "")
+	if trinoURL == "" {
+		// Check if we can resolve trino hostname (Docker network)
+		// If not, use localhost (local development)
+		trinoURL = "http://localhost:8081" // External port
+		// In Docker, this will be overridden by TRINO_URL env var
+	}
+	
 	user := getEnv("TRINO_USER", "admin")
 
 	return &Client{
@@ -122,12 +131,12 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	healthURL := fmt.Sprintf("%s/v1/info", c.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to Trino at %s: %w. Is Trino running?", c.baseURL, err)
 	}
 	defer resp.Body.Close()
 

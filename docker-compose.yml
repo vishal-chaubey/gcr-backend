@@ -9,6 +9,8 @@ services:
       GCR_HTTP_ADDR: ${GCR_HTTP_ADDR}
       REDIS_ADDR: ${REDIS_ADDR}
       KAFKA_BROKER: ${KAFKA_BROKER}
+      TRINO_URL: ${TRINO_URL:-http://trino:8080}
+      TRINO_USER: ${TRINO_USER:-admin}
     ports:
       - "8080:8080"
     depends_on:
