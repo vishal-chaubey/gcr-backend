@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // QueryService provides querying capabilities for JSONL files
@@ -15,9 +16,22 @@ type QueryService struct {
 
 // NewQueryService creates a new JSONL query service
 func NewQueryService() *QueryService {
-	return &QueryService{
-		dataDir: "./data/hudi/providers",
+	// Use /app/data in Docker container, ./data for local development
+	dataDir := getEnv("DATA_DIR", "/app/data/hudi/providers")
+	// Fallback to ./data if /app/data doesn't exist (local dev)
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		dataDir = "./data/hudi/providers"
 	}
+	return &QueryService{
+		dataDir: dataDir,
+	}
+}
+
+func getEnv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // Provider represents a provider from JSONL
@@ -35,9 +49,32 @@ type Provider struct {
 
 // GetAllProviders returns all providers from JSONL files
 func (s *QueryService) GetAllProviders(ctx context.Context, limit, offset int) ([]Provider, error) {
-	files, err := filepath.Glob(filepath.Join(s.dataDir, "*.jsonl"))
+	// Try multiple possible paths
+	possibleDirs := []string{
+		s.dataDir,
+		"/app/data/hudi/providers",
+		"./data/hudi/providers",
+		"data/hudi/providers",
+	}
+
+	var files []string
+	var err error
+	
+	for _, dir := range possibleDirs {
+		pattern := filepath.Join(dir, "*.jsonl")
+		files, err = filepath.Glob(pattern)
+		if err == nil && len(files) > 0 {
+			s.dataDir = dir
+			break
+		}
+	}
+	
 	if err != nil {
 		return nil, fmt.Errorf("failed to list files: %w", err)
+	}
+	
+	if len(files) == 0 {
+		return []Provider{}, nil // Return empty, not error
 	}
 
 	providers := []Provider{}
@@ -49,24 +86,38 @@ func (s *QueryService) GetAllProviders(ctx context.Context, limit, offset int) (
 			break
 		}
 
-		data, err := os.ReadFile(file)
+		// Read file line by line (JSONL format - one JSON object per line)
+		fileData, err := os.ReadFile(file)
 		if err != nil {
 			continue
 		}
 
-		var provider Provider
-		if err := json.Unmarshal(data, &provider); err != nil {
-			continue
-		}
+		// Split by newlines and process each line
+		lines := strings.Split(string(fileData), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
 
-		if skipped < offset {
-			skipped++
-			continue
-		}
+			if count >= limit+offset {
+				break
+			}
 
-		if count < limit {
-			providers = append(providers, provider)
-			count++
+			var provider Provider
+			if err := json.Unmarshal([]byte(line), &provider); err != nil {
+				continue
+			}
+
+			if skipped < offset {
+				skipped++
+				continue
+			}
+
+			if count < limit {
+				providers = append(providers, provider)
+				count++
+			}
 		}
 	}
 
@@ -82,8 +133,23 @@ func (s *QueryService) GetProvider(ctx context.Context, providerID string) (*Pro
 		return nil, fmt.Errorf("provider not found: %w", err)
 	}
 
+	// JSONL format - get the last line (most recent record)
+	lines := strings.Split(string(data), "\n")
+	var lastLine string
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			lastLine = line
+			break
+		}
+	}
+
+	if lastLine == "" {
+		return nil, fmt.Errorf("provider file is empty")
+	}
+
 	var provider Provider
-	if err := json.Unmarshal(data, &provider); err != nil {
+	if err := json.Unmarshal([]byte(lastLine), &provider); err != nil {
 		return nil, fmt.Errorf("failed to parse provider: %w", err)
 	}
 
@@ -105,55 +171,68 @@ func (s *QueryService) GetItems(ctx context.Context, providerID, categoryID, cit
 			break
 		}
 
-		data, err := os.ReadFile(file)
+		fileData, err := os.ReadFile(file)
 		if err != nil {
 			continue
 		}
 
-		var provider Provider
-		if err := json.Unmarshal(data, &provider); err != nil {
-			continue
-		}
-
-		// Apply filters
-		if providerID != "" && provider.ProviderID != providerID {
-			continue
-		}
-		if city != "" && provider.City != city {
-			continue
-		}
-
-		// Extract items
-		for _, itemRaw := range provider.Items {
-			item, ok := itemRaw.(map[string]interface{})
-			if !ok {
+		// Process each line in JSONL file
+		lines := strings.Split(string(fileData), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
 				continue
 			}
 
-			// Filter by category if specified
-			if categoryID != "" {
-				itemCatID, _ := item["category_id"].(string)
-				if itemCatID != categoryID {
-					continue
-				}
-			}
-
-			itemMap := map[string]interface{}{
-				"provider_id":    provider.ProviderID,
-				"city":           provider.City,
-				"domain":         provider.Domain,
-				"item_id":        item["id"],
-				"item_name":      getNestedString(item, "descriptor", "name"),
-				"category_id":    item["category_id"],
-				"price_value":    getNestedString(item, "price", "value"),
-				"price_currency": getNestedString(item, "price", "currency"),
-			}
-
-			items = append(items, itemMap)
-			count++
-
 			if count >= limit {
 				break
+			}
+
+			var provider Provider
+			if err := json.Unmarshal([]byte(line), &provider); err != nil {
+				continue
+			}
+
+			// Apply filters
+			if providerID != "" && provider.ProviderID != providerID {
+				continue
+			}
+			if city != "" && provider.City != city {
+				continue
+			}
+
+			// Extract items
+			for _, itemRaw := range provider.Items {
+				item, ok := itemRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				// Filter by category if specified
+				if categoryID != "" {
+					itemCatID, _ := item["category_id"].(string)
+					if itemCatID != categoryID {
+						continue
+					}
+				}
+
+				itemMap := map[string]interface{}{
+					"provider_id":    provider.ProviderID,
+					"city":           provider.City,
+					"domain":         provider.Domain,
+					"item_id":        item["id"],
+					"item_name":      getNestedString(item, "descriptor", "name"),
+					"category_id":    item["category_id"],
+					"price_value":    getNestedString(item, "price", "value"),
+					"price_currency": getNestedString(item, "price", "currency"),
+				}
+
+				items = append(items, itemMap)
+				count++
+
+				if count >= limit {
+					break
+				}
 			}
 		}
 	}
@@ -178,25 +257,34 @@ func (s *QueryService) GetStats(ctx context.Context) (map[string]interface{}, er
 	}
 
 	for _, file := range files {
-		data, err := os.ReadFile(file)
+		fileData, err := os.ReadFile(file)
 		if err != nil {
 			continue
 		}
 
-		var provider Provider
-		if err := json.Unmarshal(data, &provider); err != nil {
-			continue
-		}
+		// Process each line (JSONL format)
+		lines := strings.Split(string(fileData), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
 
-		stats["total_providers"] = stats["total_providers"].(int) + 1
-		stats["total_records"] = stats["total_records"].(int) + 1
-		stats["total_items"] = stats["total_items"].(int) + len(provider.Items)
+			var provider Provider
+			if err := json.Unmarshal([]byte(line), &provider); err != nil {
+				continue
+			}
 
-		stats["total_domains"].(map[string]bool)[provider.Domain] = true
-		stats["total_cities"].(map[string]bool)[provider.City] = true
+			stats["total_providers"] = stats["total_providers"].(int) + 1
+			stats["total_records"] = stats["total_records"].(int) + 1
+			stats["total_items"] = stats["total_items"].(int) + len(provider.Items)
 
-		if provider.Timestamp > stats["latest_update"].(string) {
-			stats["latest_update"] = provider.Timestamp
+			stats["total_domains"].(map[string]bool)[provider.Domain] = true
+			stats["total_cities"].(map[string]bool)[provider.City] = true
+
+			if provider.Timestamp > stats["latest_update"].(string) {
+				stats["latest_update"] = provider.Timestamp
+			}
 		}
 	}
 
